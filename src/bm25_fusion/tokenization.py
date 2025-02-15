@@ -3,12 +3,17 @@ Tokenization module for BM25 Fusion.
 """
 
 import re
+from nltk.stem import PorterStemmer
+
+# Initialize the PorterStemmer
+stemmer = PorterStemmer()
 
 def tokenize(text):
     """
-    Tokenizes the input text using word boundaries.
+    Tokenizes the input text using word boundaries and applies stemming.
     """
-    return re.findall(r'\b\w+\b', text)
+    tokens = re.findall(r'\b\w+\b', text)
+    return [stemmer.stem(token) for token in tokens]
 
 def whitespace_tokenize(text):
     """

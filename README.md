@@ -143,6 +143,10 @@ Contributions are welcome! Feel free to open issues or submit pull requests with
 - Write unit tests for new features.
 - Update documentation as needed.
 
+To-Do:
+- Benchmark with Standerd Retrieval Datasets.
+- Example Notebooks
+
 ## License
 
 BM25 Fusion is licensed under the MIT License. See the [LICENSE](LICENSE) file for more details.

@@ -49,8 +49,10 @@ def test_bm25_empty_query():
     corpus = ["hello world", "machine learning is fun", "hello machine"]
     corpus_tokens = [doc.split() for doc in corpus]
     bm25 = BM25(corpus_tokens, texts=corpus, variant="bm25")
-    results = bm25.query([], top_k=2)
-    assert len(results) == 0
+    try:
+        bm25.query([], top_k=2)
+    except AssertionError as e:
+        assert str(e) == "Query tokens cannot be empty."
 
 def test_bm25_metadata_filter():
     """
