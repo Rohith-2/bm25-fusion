@@ -65,13 +65,9 @@ metadata = [
     {"category": "news", "author": "Charlie"}
 ]
 
-# Tokenize the corpus (a simple whitespace tokenizer)
-corpus_tokens = [tokenize(doc) for doc in corpus]
-
 # Create BM25 index using the BM25+ variant with stopword removal
 stopwords = {"is", "a", "the", "and"}
 bm25 = BM25(
-    corpus_tokens,
     metadata=metadata,
     texts=corpus,
     variant="bm25+",
@@ -81,7 +77,7 @@ bm25 = BM25(
 
 # Run a query with metadata filtering (e.g., only "science" documents)
 query = "machine learning"
-results = bm25.query(tokenize(query), metadata_filter={"category": "science"}, top_k=2)
+results = bm25.query(query, metadata_filter={"category": "science"}, top_k=2)
 
 for res in results:
     print(f"Score: {res['score']:.4f} | Text: {res['text']} | Metadata: {res}")
@@ -105,11 +101,10 @@ You can adjust the `delta` parameter as needed (default is 0.5).
 **Constructor:**
 
 ```python
-BM25(corpus_tokens, metadata=None, texts=None, k1=1.5, b=0.75,
+BM25(metadata=None, texts=None, k1=1.5, b=0.75,
      variant="bm25", delta=0.5, stopwords=None)
 ```
 
-- `corpus_tokens`: A list of token lists (each document tokenized).
 - `metadata`: A list of dictionaries containing document metadata.
 - `texts`: A list of raw text strings corresponding to each document.
 - `k1`: BM25 k1 parameter.
@@ -122,7 +117,7 @@ BM25(corpus_tokens, metadata=None, texts=None, k1=1.5, b=0.75,
 
 - `query(query_tokens, metadata_filter=None, top_k=10)`:  
   Runs a query against the indexed corpus.
-  - `query_tokens`: A list of tokens from the query.
+  - `query_tokens`: The query in string format.
   - `metadata_filter`: A dictionary specifying metadata constraints (e.g., `{"category": "science"}`).
   - `top_k`: The number of top results to return.
   
@@ -145,7 +140,6 @@ Contributions are welcome! Feel free to open issues or submit pull requests with
 
 To-Do:
 - Benchmark with Standerd Retrieval Datasets.
-- Example Notebooks
 
 ## License
 
