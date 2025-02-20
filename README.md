@@ -1,6 +1,6 @@
 # BM25 Fusion
 
-BM25 Fusion is an ultra‑fast, flexible BM25 retriever library written in Python and optimised via numba. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
+BM25 Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering library written in Python and optimised via JAX. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
 
 ## Features
 
