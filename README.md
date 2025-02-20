@@ -1,17 +1,20 @@
 # BM25 Fusion
 
-BM25 Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering library written in Python and optimised via JAX. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
+BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering  & Real Time modifiable library written in Python and optimised via JAX. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
 
 ## Features
+
+- **Metadata Filtering:**  
+  Supports filtering of results based on metadata (e.g., category, author) by applying a mask on the computed scores.
 
 - **Multiple BM25 Variants:**  
   Supports classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE variants. Configure the variant and delta parameter to adjust scoring as needed.
 
+- **Real Time Addition & Deletion**
+  Supports adding and removing docs efficienty.
+
 - **Eager Indexing:**  
   Precomputes BM25 score contributions for each document token and stores them in a sparse matrix. This minimizes query-time computations.
-
-- **Metadata Filtering:**  
-  Supports filtering of results based on metadata (e.g., category, author) by applying a mask on the computed scores.
 
 - **Stopword Removal:**  
   Integrates stopword removal during both indexing and query processing to improve retrieval quality.
@@ -75,6 +78,9 @@ bm25 = BM25(
     stopwords=stopwords
 )
 
+bm25.add_document(['This is the hello document with jax in it'], [{'author': 'Me', 'year': 2021}])
+
+
 # Run a query with metadata filtering (e.g., only "science" documents)
 query = "machine learning"
 results = bm25.query(query, metadata_filter={"category": "science"}, top_k=2)
@@ -129,7 +135,7 @@ BM25(metadata=None, texts=None, k1=1.5, b=0.75,
 
 ## Tokenization
 
-The package includes a simple tokenization function in `bm25_fusion/tokenization.py`. The default tokenizer splits text on whitespace. You can replace or extend it as needed.
+The package includes a simple tokenization function in `bm25_fusion/tokenization.py`. The default tokenizer splits text on whitespace and removes punctuation. You can replace or extend it as needed.
 
 ## Contributing
 
