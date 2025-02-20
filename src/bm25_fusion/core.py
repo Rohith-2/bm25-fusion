@@ -2,8 +2,8 @@ import threading
 import pickle
 from collections import defaultdict
 import jax.numpy as jnp
-from tokenization import tokenize 
-from retrieval import optimized_query
+from .tokenization import tokenize 
+from .retrieval import optimized_query
 
 class BM25:
     def __init__(self, texts=None, metadata=None, k1=1.5, b=0.75, delta=0.5,
