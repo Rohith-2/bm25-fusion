@@ -1,206 +1,176 @@
-"""
-BM25 Fusion package initialization.
-"""
-
+import threading
 import pickle
 from collections import defaultdict
-from nltk.corpus import stopwords as st
-import numpy as np
-from scipy.sparse import csr_matrix
-from numba import njit, prange
-import nltk
-from nltk.stem import PorterStemmer
-nltk.download('stopwords')
+import jax.numpy as jnp
+from tokenization import tokenize 
+from retrieval import optimized_query
 
 class BM25:
-    """
-    BM25 class for information retrieval.
-    """
-    def __init__(self, corpus_tokens, texts, **kwargs):
+    def __init__(self, texts=None, metadata=None, k1=1.5, b=0.75, delta=0.5,
+                 variant='bm25', stopwords=None):
         """
         Initialize BM25 instance.
+        
+        Parameters:
+          texts: list of document strings.
+          metadata: list of dicts corresponding to each document.
+          k1, b, delta: BM25 parameters.
+          variant: one of {"bm25", "bm25+", "bm25l", "atire"}.
+          stopwords: iterable of stopwords to filter out; if None, no filtering is done.
         """
-        self.k1 = kwargs.get('k1', 1.5)
-        self.b = kwargs.get('b', 0.75)
-        self.delta = kwargs.get('delta', 0.5)
-        self.variant = kwargs.get('variant', 'bm25').lower()
-        self.stopwords = set(s.lower() for s in kwargs.get('stopwords', [])) \
-            if kwargs.get('stopwords') is not None else set(st.words('english'))
-        self.num_docs = len(corpus_tokens)
-        self.doc_lengths = np.array([len(doc) for doc in corpus_tokens], dtype=np.float32)
-        self.avgdl = np.mean(self.doc_lengths)
-        self.stemmer = PorterStemmer()
-        self.vocab = self._build_vocab(self._stem_corpus(corpus_tokens))
-        self.tf_matrix = self._compute_tf_matrix(self._stem_corpus(corpus_tokens))
-        self.idf = self._compute_idf()
-        self.metadata = kwargs.get('metadata', [{} for _ in range(self.num_docs)])
-        self.texts = texts if texts is not None else [""] * self.num_docs
-
-        # Determine method code:
-        # 0: BM25 classic, 1: BM25+, 2: BM25L, 3: ATIRE (classic BM25 with nonnegative idf)
-        if self.variant in ("bm25", "lucene", "robertson"):
-            self._method_code = 0
-        elif self.variant == "bm25+":
-            self._method_code = 1
-        elif self.variant == "bm25l":
-            self._method_code = 2
-        elif self.variant == "atire":
-            self._method_code = 3
-            self.idf = np.maximum(self.idf, 0)
+        self.k1, self.b, self.delta = k1, b, delta
+        self.variant = variant.lower()
+        self.texts = texts if texts else []
+        # Tokenize each text and filter stopwords (case-insensitive)
+        if texts:
+            self.corpus_tokens = []
+            for doc in texts:
+                tokens = tokenize(doc)
+                if stopwords:
+                    tokens = [t for t in tokens if t.lower() not in {s.lower() for s in stopwords}]
+                self.corpus_tokens.append(tokens)
         else:
-            raise ValueError(f"Unknown BM25 variant: {self.variant}")
-
-        self.eager_index = _eager_scores(
-            self.tf_matrix.data, self.tf_matrix.indices, self.tf_matrix.indptr,
-            self.idf, self.doc_lengths, self.avgdl, self._method_code,
-            self.k1, self.b, self.delta
-        )
-
-    def _stem_corpus(self, corpus):
-        """
-        Apply stemming to the corpus.
-        """
-        return [[self.stemmer.stem(word) for word in doc] for doc in corpus]
-
-    def _build_vocab(self, corpus):
-        """
-        Build vocabulary from the corpus.
-        """
-        unique_words = set()
-        for doc in corpus:
-            unique_words.update(doc)
-        return {word: i for i, word in enumerate(unique_words)}
-
-    def _compute_tf_matrix(self, corpus):
-        """
-        Compute term frequency matrix.
-        """
-        row, col, data = [], [], []
+            self.corpus_tokens = []
+        self.num_docs = len(self.corpus_tokens)
+        self.doc_lengths = jnp.array([len(doc) for doc in self.corpus_tokens], dtype=jnp.float32) if self.num_docs > 0 else jnp.array([])
+        self.avgdl = jnp.mean(self.doc_lengths) if self.num_docs > 0 else 1.0
+        
+        # Build vocabulary and inverted index
+        self.vocab, self.inverted_index = self._build_index(self.corpus_tokens)
+        # Compute idf for each term (using classic BM25 formula)
+        self.idf = self._compute_idf()
+        # For ATIRE, clamp idf to nonnegative values.
+        if self.variant == "atire":
+            self.idf = {term: jnp.maximum(val, 0) for term, val in self.idf.items()}
+        self.metadata = metadata if metadata else [{} for _ in range(self.num_docs)]
+        self.lock = threading.Lock()
+    
+    def _build_index(self, corpus):
+        """Build vocabulary and inverted index from corpus_tokens."""
+        vocab = {}
+        inverted_index = defaultdict(list)
         for doc_id, doc in enumerate(corpus):
-            counts = defaultdict(int)
+            term_freqs = defaultdict(int)
             for word in doc:
-                counts[word] += 1
-            for word, count in counts.items():
-                if word in self.vocab:
-                    row.append(doc_id)
-                    col.append(self.vocab[word])
-                    data.append(count)
-        return csr_matrix((np.array(data, dtype=np.float32),
-                           (np.array(row), np.array(col))),
-                          shape=(self.num_docs, len(self.vocab)), dtype=np.float32)
+                if word not in vocab:
+                    vocab[word] = len(vocab)
+                term_freqs[word] += 1
+            for term, freq in term_freqs.items():
+                inverted_index[term].append((doc_id, freq))
+        return vocab, inverted_index
 
     def _compute_idf(self):
-        """
-        Compute inverse document frequency.
-        """
-        df = np.array(self.tf_matrix.astype(bool).sum(axis=0)).flatten()
-        df = np.maximum(df, 1e-6)
-        return np.log((self.num_docs - df + 0.5) / (df + 0.5) + 1).astype(np.float32)
+        """Compute idf for each term using the formula: log((N - df + 0.5)/(df + 0.5) + 1)."""
+        df = {term: len(postings) for term, postings in self.inverted_index.items()}
+        idf = {}
+        for term, count in df.items():
+            idf[term] = jnp.log((self.num_docs - count + 0.5) / (count + 0.5) + 1)
+        return idf
 
-    def query(self, query_tokens, metadata_filter=None, top_k=10, do_keyword=True):
-        """
-        Query the BM25 index.
-        """
-        if type(query_tokens)!=list:
-            query_tokens = query_tokens.split()
-
-        assert len(query_tokens)>0, "Query tokens cannot be empty."
-        # Remove stopwords from query tokens if provided
-        if self.stopwords is not None:
-            query_tokens = [token for token in query_tokens if token.lower() not in self.stopwords]
-        query_tokens = [self.stemmer.stem(token) for token in query_tokens]
-        qvec = np.zeros(len(self.vocab), dtype=np.float32)
-        for word in query_tokens:
-            if word in self.vocab:
-                qvec[self.vocab[word]] += 1
-        scores = _retrieve_scores(self.eager_index, self.tf_matrix.indices,
-                                  self.tf_matrix.indptr, qvec)
+    def _compute_term_score(self, tf, idf_val, doc_len):
+        """Compute BM25 score for a term in a document based on variant."""
+        norm = self.k1 * (1 - self.b + self.b * (doc_len / self.avgdl))
+        if self.variant in ("bm25", "atire"):
+            return idf_val * ((tf * (self.k1 + 1)) / (tf + norm))
+        elif self.variant == "bm25+":
+            return idf_val * (((tf + self.delta) * (self.k1 + 1)) / (tf + norm + self.delta))
+        elif self.variant == "bm25l":
+            return idf_val * (tf / (tf + norm + self.delta * (doc_len / self.avgdl)))
+        else:
+            return 0.0
         
-        # Calculate keyword match scores using query tokens
-        if do_keyword:
-            keyword_scores = _compute_keyword_scores(self.texts, query_tokens)
-            scores += keyword_scores
-
-        if metadata_filter:
-            mask = np.array([
-                all(self.metadata[i].get(key) == val for key, val in metadata_filter.items())
-                for i in range(self.num_docs)
-            ], dtype=np.float32)
-            scores *= mask
-
-        top_indices = np.argpartition(scores, -top_k)[-top_k:]
-        top_indices = top_indices[np.argsort(scores[top_indices])[::-1]]
-        results = []
-        for i in top_indices:
-            if scores[i] > 0:
-                res = {"text": self.texts[i], "score": float(scores[i])}
-                res.update(self.metadata[i])
-                results.append(res)
-        return results
-
-    def save(self, path):
+    def query(self, query, top_k=10, metadata_filter=None,threshold=0.01):
         """
-        Save the BM25 index to a file.
+        Retrieve documents matching the query.
+        
+        Parameters:
+          query: query string.
+          top_k: number of top documents to return.
+          metadata_filter: optional dict for metadata filtering.
+          do_keyword: if True, add bonus score based on raw keyword matching.
+        
+        Returns: list of dicts with keys "text" and "score" (plus metadata fields).
         """
+        return optimized_query(self.num_docs, self.doc_lengths, self.avgdl, self.inverted_index, 
+                               self.idf, self.k1, self.b, query, self.texts, self.metadata, metadata_filter, 
+                               top_k, self.variant, self.delta,threshold)
+
+    def add_document(self, new_texts, new_metadata=None):
+        """
+        Add new document(s) to the index.
+        new_texts: list of document strings.
+        new_metadata: list of metadata dicts, one per document.
+        """
+        with self.lock:
+            for idx, text in enumerate(new_texts):
+                doc_id = self.num_docs
+                self.texts.append(text)
+                tokens = tokenize(text)
+                self.corpus_tokens.append(tokens)
+                self.num_docs += 1
+                # Update doc_lengths and average doc length
+                doc_len = len(tokens)
+                self.doc_lengths = jnp.concatenate([self.doc_lengths, jnp.array([doc_len], dtype=jnp.float32)])
+                self.avgdl = jnp.mean(self.doc_lengths)
+                # Update vocabulary and inverted index for this document
+                term_freqs = defaultdict(int)
+                for word in tokens:
+                    term_freqs[word] += 1
+                    if word not in self.vocab:
+                        self.vocab[word] = len(self.vocab)
+                for term, freq in term_freqs.items():
+                    self.inverted_index[term].append((doc_id, freq))
+                # Update metadata
+                if new_metadata and idx < len(new_metadata):
+                    self.metadata.append(new_metadata[idx])
+                else:
+                    self.metadata.append({})
+            # Recompute idf
+            self.idf = self._compute_idf()
+            if self.variant == "atire":
+                self.idf = {term: jnp.maximum(val, 0) for term, val in self.idf.items()}
+
+    def remove_document(self, text):
+        """
+        Remove the first document matching the given text.
+        """
+        with self.lock:
+            for i, doc_text in enumerate(self.texts):
+                if doc_text == text:
+                    doc_id = i
+                    # Remove postings corresponding to doc_id in inverted index
+                    for term in list(self.inverted_index.keys()):
+                        self.inverted_index[term] = [(d, tf) for d, tf in self.inverted_index[term] if d != doc_id]
+                    # Remove document data
+                    del self.texts[doc_id]
+                    del self.corpus_tokens[doc_id]
+                    # Rebuild doc_lengths and update average length
+                    self.doc_lengths = jnp.array([len(doc) for doc in self.corpus_tokens], dtype=jnp.float32)
+                    self.avgdl = jnp.mean(self.doc_lengths) if self.num_docs > 1 else 1.0
+                    del self.metadata[doc_id]
+                    self.num_docs -= 1
+                    # Recompute idf
+                    self.idf = self._compute_idf()
+                    if self.variant == "atire":
+                        self.idf = {term: jnp.maximum(val, 0) for term, val in self.idf.items()}
+                    break
+
+    def save_index(self, path):
         with open(path, 'wb') as f:
-            pickle.dump(self, f)
+            pickle.dump((self.vocab, dict(self.inverted_index), self.idf,
+                         self.doc_lengths, self.avgdl, self.texts,
+                         self.corpus_tokens, self.metadata), f)
 
     @staticmethod
-    def load(path):
-        """
-        Load the BM25 index from a file.
-        """
+    def load_index(path):
         with open(path, 'rb') as f:
-            return pickle.load(f)
-
-@njit(parallel=True)
-def _eager_scores(tf_data, tf_indices, tf_indptr, idf, doc_lengths,
-                  avgdl, method_code, k1, b, delta):
-    """
-    Compute the eager scores for the BM25 index.
-    """
-    num_docs = len(doc_lengths)
-    score_data = np.empty_like(tf_data)
-    for d in prange(num_docs):
-        norm = k1 * (1 - b + b * doc_lengths[d] / avgdl)
-        for j in range(tf_indptr[d], tf_indptr[d+1]):
-            tf = tf_data[j]
-            if method_code in {0, 3}:
-                score = idf[tf_indices[j]] * ((tf * (k1 + 1)) / (tf + norm))
-            elif method_code == 1:
-                score = idf[tf_indices[j]] * (((tf + delta) * (k1 + 1)) / (tf + norm + delta))
-            elif method_code == 2:
-                score = idf[tf_indices[j]] * (tf / (tf + norm + delta * (doc_lengths[d] / avgdl)))
-            else:
-                score = 0.0
-            score_data[j] = score
-    return score_data
-
-@njit(parallel=True)
-def _retrieve_scores(eager_data, tf_indices, tf_indptr, query_vec):
-    """
-    Retrieve the scores for the query.
-    """
-    num_docs = len(tf_indptr) - 1
-    scores = np.zeros(num_docs, dtype=np.float32)
-    for d in prange(num_docs):
-        s = 0.0
-        for j in range(tf_indptr[d], tf_indptr[d+1]):
-            i = tf_indices[j]
-            if query_vec[i] > 0:
-                s += eager_data[j]
-        scores[d] = s
-    return scores
-
-@njit(parallel=True)
-def _compute_keyword_scores(texts, keywords):
-    """
-    Compute keyword match scores for each document.
-    """
-    num_docs = len(texts)
-    keyword_scores = np.zeros(num_docs, dtype=np.float32)
-    for i in prange(num_docs):
-        for keyword in keywords:
-            if keyword.lower() in texts[i].lower():
-                keyword_scores[i] += 1
-    return keyword_scores
+            vocab, inverted_index, idf, doc_lengths, avgdl, texts, corpus_tokens, metadata = pickle.load(f)
+            instance = BM25(texts=texts, metadata=metadata)
+            instance.vocab = vocab
+            instance.inverted_index = defaultdict(list, inverted_index)
+            instance.idf = idf
+            instance.doc_lengths = doc_lengths
+            instance.avgdl = avgdl
+            instance.corpus_tokens = corpus_tokens
+            instance.num_docs = len(texts)
+            return instance
