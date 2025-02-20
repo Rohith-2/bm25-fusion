@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bm25_fusion"
-version = "0.1.1"
+version = "0.1.2"
 description = "An ultra-fast BM25 retriever with support for multiple variants, metadata filtering, and stopword removal."
 readme = "README.md"
 license = {text = "MIT License"}
@@ -13,5 +13,8 @@ requires-python = ">=3.10"
 dependencies = [
     "numpy",
     "scipy",
-    "numba"
+    "numba",
+    "jax",
+    "nltk",
+    "tqdm"
 ]

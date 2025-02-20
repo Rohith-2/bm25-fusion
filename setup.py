@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="bm25_fusion",
-    version="0.1.1",
+    version="0.1.2",
     author="Rohith Ramakrishnan",
     author_email="rrohith2001@gmail.com",
     description="An ultra-fast BM25 retriever with support for multiple variants, metadata filtering, and stopword removal.",
@@ -21,5 +21,8 @@ setup(
         "numpy",
         "scipy",
         "numba",
+        "jax",
+        "nltk",
+        
     ],
 )
