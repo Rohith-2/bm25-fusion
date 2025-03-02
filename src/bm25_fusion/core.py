@@ -2,18 +2,18 @@
 BM25 Fusion package initialization.
 """
 
+import gc
+import nltk
+import joblib
 import pickle
+import numpy as np
+from threading import Lock
+from numba import njit, prange
+from nltk.stem import PorterStemmer
 from collections import defaultdict
 from nltk.corpus import stopwords as st
-import numpy as np
-from numba import njit, prange
-import nltk
-from nltk.stem import PorterStemmer
-import joblib
+from .tokenization import tokenize_texts
 from concurrent.futures import ThreadPoolExecutor
-import gc
-from threading import Lock
-nltk.download('stopwords')
 
 class BM25:
     """

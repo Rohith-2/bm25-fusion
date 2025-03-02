@@ -3,16 +3,13 @@ Tokenization module for BM25 Fusion.
 """
 
 import re
+import nltk
+from tqdm import tqdm
 from nltk.stem import PorterStemmer
 from concurrent.futures import ProcessPoolExecutor
-from tqdm import tqdm
-import nltk
 
 # Initialize the PorterStemmer
 stemmer = PorterStemmer()
-
-# Ensure required data is downloaded.
-nltk.download('punkt')
 
 # Set up the tokenizer; you can use any NLTK tokenizer.
 tokenizer = nltk.word_tokenize
