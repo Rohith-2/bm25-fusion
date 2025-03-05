@@ -1,6 +1,6 @@
 # BM25 Fusion
 
-BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering  & Real Time modifiable library written in Python and optimised via JAX. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
+BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering  & Real Time modifiable library written in Python and optimised via Numba. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
 
 ## Features
 
@@ -123,7 +123,7 @@ BM25(metadata=None, texts=None, k1=1.5, b=0.75,
 
 - `query(query_tokens, metadata_filter=None, top_k=10)`:  
   Runs a query against the indexed corpus.
-  - `query_tokens`: The query in string format.
+  - `query_tokens`: The query in string format or list[str]
   - `metadata_filter`: A dictionary specifying metadata constraints (e.g., `{"category": "science"}`).
   - `top_k`: The number of top results to return.
   
@@ -155,4 +155,3 @@ BM25 Fusion is licensed under the MIT License. See the [LICENSE](LICENSE) file f
 
 - Inspired by [bm25s](https://github.com/xhluca/bm25s) and related BM25 implementations.
 - Thanks to the communities behind BM25 research.
-
