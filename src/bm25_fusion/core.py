@@ -202,11 +202,11 @@ class BM25:
             'avgdl': self.avgdl,
             'vocab': self.vocab,
             'vocab_size': self.vocab_size,
-            'tf_matrix': {
-                'data': self.tf_matrix[0],
-                'indices': self.tf_matrix[1],
-                'indptr': self.tf_matrix[2]
-            },
+            'tf_matrix': (
+                 self.tf_matrix[0],
+                 self.tf_matrix[1],
+                 self.tf_matrix[2]
+            ),
             'idf': self.idf,
             'metadata': self.metadata,
             'texts': self.texts,
@@ -215,19 +215,6 @@ class BM25:
             'eager_index': self.eager_index
         }
         joblib.dump(state, filepath, compress=3)
-
-    @staticmethod
-    def load(filepath):
-        """
-        Load the BM25 index weights and parameters from a file using Joblib.
-        """
-        state = joblib.load(filepath)
-        obj = BM25.__new__(BM25)  # create an uninitialized BM25 instance
-        obj.__dict__.update(state)
-        # Recreate any non-serializable attributes if needed (e.g. stemmer)
-        from nltk.stem import PorterStemmer
-        obj.stemmer = PorterStemmer()
-        return obj
 
     def _rebuild_index(self, num_processes=4):
         """
@@ -320,3 +307,16 @@ def _compute_keyword_scores(texts, keywords):
             if texts[i].find(keyword) != -1:
                 keyword_scores[i] += 1
     return keyword_scores
+
+@staticmethod
+def load(filepath):
+    """
+    Load the BM25 index weights and parameters from a file using Joblib.
+    """
+    state = joblib.load(filepath)
+    obj = BM25.__new__(BM25)  # create an uninitialized BM25 instance
+    obj.__dict__.update(state)
+    # Recreate any non-serializable attributes if needed (e.g. stemmer)
+    from nltk.stem import PorterStemmer
+    obj.stemmer = PorterStemmer()
+    return obj
