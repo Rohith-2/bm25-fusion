@@ -3,10 +3,11 @@ Tokenization module for BM25 Fusion.
 """
 
 import re
+from concurrent.futures import ProcessPoolExecutor
+
 import nltk
 from tqdm import tqdm
 from nltk.stem import PorterStemmer
-from concurrent.futures import ProcessPoolExecutor
 
 # Initialize the PorterStemmer
 stemmer = PorterStemmer()
@@ -34,6 +35,9 @@ def punctuation_tokenize(text):
     return re.findall(r'\w+|[^\w\s]', text, re.UNICODE)
 
 def process_document(doc):
+    """
+    Processes a document using the default tokenizer.
+    """
     return tokenizer(doc)
 
 def tokenize_texts(texts, num_processes=8):

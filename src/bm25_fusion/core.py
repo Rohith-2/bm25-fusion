@@ -2,18 +2,19 @@
 BM25 Fusion package initialization.
 """
 
+# pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-locals, too-many-positional-arguments
+
 import gc
-import nltk
-import joblib
-import pickle
-import numpy as np
 from threading import Lock
+from collections import Counter
+from concurrent.futures import ThreadPoolExecutor
+
+import joblib
+import numpy as np
 from numba import njit, prange
 from nltk.stem import PorterStemmer
-from collections import defaultdict
 from nltk.corpus import stopwords as st
 from .tokenization import tokenize_texts
-from concurrent.futures import ThreadPoolExecutor
 
 class BM25:
     """
@@ -38,7 +39,7 @@ class BM25:
         self.stemmer = PorterStemmer()
         self.num_docs = len(texts)
         self.texts = texts if texts is not None else [""] * self.num_docs
-      
+
         # Compute the stemmed corpus once:
         stemmed_corpus = self._stem_corpus(corpus_tokens)
         self.vocab = self._build_vocab(stemmed_corpus)
@@ -49,7 +50,7 @@ class BM25:
 
         self.idf = self._compute_idf()
         self.metadata = kwargs.get('metadata', [{} for _ in range(self.num_docs)])
-        
+
         # Precompute lower-case texts for efficient keyword matching.
         self.texts_lower = [t.lower() for t in self.texts]
 
@@ -65,7 +66,7 @@ class BM25:
             self.idf = np.maximum(self.idf, 0)
         else:
             raise ValueError(f"Unknown BM25 variant: {self.variant}")
-        
+            
         self.eager_index = _eager_scores(
             self.tf_matrix[0], self.tf_matrix[1], self.tf_matrix[2],
             self.idf, self.doc_lengths, self.avgdl, self._method_code,
@@ -108,17 +109,15 @@ class BM25:
             tf_indices: list of vocabulary indices (int)
             tf_indptr: list of document pointer indices (int)
         """
-        from collections import defaultdict
         data_list = []
         indices_list = []
         indptr = [0]
         for doc in corpus:
-            counts = defaultdict(int)
-            for word in doc:
-                counts[word] += 1
+            counts = Counter(doc)
             for word, count in counts.items():
-                if word in self.vocab:
-                    indices_list.append(self.vocab[word])
+                vocab_index = self.vocab.get(word)
+                if vocab_index is not None:
+                    indices_list.append(vocab_index)
                     data_list.append(float(count))
             indptr.append(len(data_list))
         self.vocab_size = len(self.vocab)
@@ -139,33 +138,31 @@ class BM25:
         """
         Query the BM25 index.
         """
-        # Ensure query_tokens is a list.
         query_tokens = query_tokens if isinstance(query_tokens, list) else query_tokens.split()
-        assert query_tokens, "Query tokens cannot be empty."
+        assert len(query_tokens) > 0, "Query tokens cannot be empty."
 
-        # Filter stopwords and apply stemming.
         query_tokens = [
-            self.stemmer.stem(token)
+            self.stemmer.stem(token.lower())
             for token in query_tokens
             if not self.stopwords or token.lower() not in self.stopwords
         ]
+        
+        assert len(query_tokens) > 0, """Query tokens must include words \
+            beyond the provided stop-words."""
 
-        # Build the query vector.
         qvec = [0.0] * len(self.vocab)
         for word in query_tokens:
             if word in self.vocab:
                 qvec[self.vocab[word]] += 1
 
-        # Minimal conversion to numpy array for Numba.
         qvec_np = np.array(qvec, dtype=np.float32)
         scores = _retrieve_scores(self.eager_index, self.tf_matrix[1], self.tf_matrix[2], qvec_np)
 
-        # Keyword matching: since texts are already lowercased.
+        # Convert self.texts_lower and keywords to tuples to fix Numba warnings.
         if do_keyword:
-            keywords = [token.lower() for token in query_tokens]
-            scores += _compute_keyword_scores(self.texts_lower, keywords)
+            keywords = tuple(token.lower() for token in query_tokens)
+            scores += _compute_keyword_scores(tuple(self.texts_lower), keywords)
 
-        # Apply metadata filtering using a list comprehension.
         if metadata_filter:
             mask = np.array(
                 [
@@ -179,7 +176,6 @@ class BM25:
 
         top_indices = np.argsort(-scores)[:top_k]
 
-        # Construct results in a memory-efficient list comprehension.
         results = [
             {"text": self.texts[i], "score": float(scores[i]), **self.metadata[i]}
             for i in top_indices
@@ -216,6 +212,19 @@ class BM25:
         }
         joblib.dump(state, filepath, compress=3)
 
+    @staticmethod
+    def load(filepath):
+        """
+        Load the BM25 index weights and parameters from a file using Joblib.
+        """
+        state = joblib.load(filepath)
+        obj = BM25.__new__(BM25)  # create an uninitialized BM25 instance
+        obj.__dict__.update(state)
+        # Recreate any non-serializable attributes if needed (e.g. stemmer)
+        obj.stemmer = PorterStemmer()
+        obj.lock = Lock()
+        return obj
+
     def _rebuild_index(self, num_processes=4):
         """
         Rebuild the BM25 index from the current texts.
@@ -235,7 +244,7 @@ class BM25:
             self.k1, self.b, self.delta
         )
 
-    def add_document(self, new_text, new_metadata=None, num_processes=4):
+    def add_document(self, new_text:list, new_metadata:list=None, num_processes=4):
         """
         Add a new document to the index based on its text.
         new_text: a single document string.
@@ -256,8 +265,8 @@ class BM25:
         with self.lock:
             try:
                 idx = self.texts.index(text)
-            except ValueError:
-                raise ValueError("Document matching the provided text not found.")
+            except ValueError as e:
+                raise ValueError("Document matching the provided text not found.") from e
             del self.texts[idx]
             del self.texts_lower[idx]
             del self.metadata[idx]
@@ -308,15 +317,3 @@ def _compute_keyword_scores(texts, keywords):
                 keyword_scores[i] += 1
     return keyword_scores
 
-@staticmethod
-def load(filepath):
-    """
-    Load the BM25 index weights and parameters from a file using Joblib.
-    """
-    state = joblib.load(filepath)
-    obj = BM25.__new__(BM25)  # create an uninitialized BM25 instance
-    obj.__dict__.update(state)
-    # Recreate any non-serializable attributes if needed (e.g. stemmer)
-    from nltk.stem import PorterStemmer
-    obj.stemmer = PorterStemmer()
-    return obj
