@@ -36,7 +36,7 @@ class BM25:
         corpus_tokens = tokenize_texts(texts, num_processes=kwargs.get('num_processes', 4))
         self.doc_lengths = np.array([len(doc) for doc in corpus_tokens], dtype=np.float32)
         self.avgdl = np.mean(self.doc_lengths)
-        self.stemmer = PorterStemmer()
+        self.stemmer = PorterStemmer() if kwargs.get('stemmer') is None else kwargs.get('stemmer')
         self.num_docs = len(texts)
         self.texts = texts if texts is not None else [""] * self.num_docs
 
@@ -147,8 +147,7 @@ class BM25:
             if not self.stopwords or token.lower() not in self.stopwords
         ]
         
-        assert len(query_tokens) > 0, """Query tokens must include words \
-            beyond the provided stop-words."""
+        assert len(query_tokens) > 0, "Query tokens must include words beyond the provided stop-words."
 
         qvec = [0.0] * len(self.vocab)
         for word in query_tokens:

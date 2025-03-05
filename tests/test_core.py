@@ -7,7 +7,7 @@ import tempfile
 import pytest
 import joblib
 import numpy as np
-from bm25_fusion.core import BM25
+from bm25_fusion import BM25
 from bm25_fusion.tokenization import tokenize
 
 def test_bm25_query():
