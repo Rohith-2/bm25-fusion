@@ -1,6 +1,15 @@
-# BM25 Fusion
+<div align="center">
 
-BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering  & Real Time modifiable library written in Python and optimised via Numba. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
+<h1>BM25-Fusion</h1>
+
+<i>BM25-Fusion is an ultra‑fast of BM25 in pure Python, with metadata filtering powered by Numba.</i>
+
+
+<a href="https://pypi.org/project/bm25-fusion/"><img alt="PyPI - Version" src="https://img.shields.io/pypi/v/bm25-fusion"></a>
+
+</div>
+
+Ultra‑fast, flexible BM25 retriever with Meta-Data Filtering & Real Time modifiable library written in Python and optimised via Numba. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
 
 ## Features
 
@@ -11,7 +20,16 @@ BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering
   Supports classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE variants. Configure the variant and delta parameter to adjust scoring as needed.
 
 - **Real Time Addition & Deletion**
-  Supports adding and removing docs efficienty.
+  Supports real-time updates:
+
+    - Addition: Rebuilds the index when new documents are added, updating texts, metadata, and all associated precomputed structures.
+    - Removal: Finds and deletes specific documents and then rebuilds the index to reflect the changes.
+
+- **High Performance:**  
+  Leverages Numba's JIT compilation for parallel score computations (eager indexing, score retrieval, and keyword matching) that helps to optimize performance even with large datasets.
+
+- **Optimised Persistance:**  
+  Utilizes HD5F to store and load bm52 models.
 
 - **Eager Indexing:**  
   Precomputes BM25 score contributions for each document token and stores them in a sparse matrix. This minimizes query-time computations.
@@ -21,9 +39,6 @@ BM25-Fusion is an ultra‑fast, flexible BM25 retriever with Meta-Data Filtering
 
 - **Modular Design:**  
   Clean, modular codebase divided into core BM25 scoring, retrieval functions, and tokenization—making it easy to maintain and extend.
-
-- **High Performance:**  
-  Uses Numba‑accelerated functions for parallelized score computations and leverages SciPy’s sparse matrices for memory efficiency and speed.
 
 ## Installation
 
@@ -83,7 +98,7 @@ bm25.add_document(['This is the hello document with jax in it'], [{'author': 'Me
 
 # Run a query with metadata filtering (e.g., only "science" documents)
 query = "machine learning"
-results = bm25.query(query, metadata_filter={"category": "science"}, top_k=2)
+results = bm25.query(query, metadata_filter={"category": ["science","news"]}, top_k=2)
 
 for res in results:
     print(f"Score: {res['score']:.4f} | Text: {res['text']} | Metadata: {res}")
@@ -155,3 +170,19 @@ BM25 Fusion is licensed under the MIT License. See the [LICENSE](LICENSE) file f
 
 - Inspired by [bm25s](https://github.com/xhluca/bm25s) and related BM25 implementations.
 - Thanks to the communities behind BM25 research.
+
+
+<details open>
+<summary>Show/Hide citation</summary><br>
+
+```
+@misc{bm25s,
+      title={BM25S: Orders of magnitude faster lexical search via eager sparse scoring}, 
+      author={Xing Han Lù},
+      year={2024},
+      eprint={2407.03618},
+      archivePrefix={arXiv},
+      primaryClass={cs.IR},
+      url={https://arxiv.org/abs/2407.03618},
+}
+```

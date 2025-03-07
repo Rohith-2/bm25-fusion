@@ -5,10 +5,8 @@ Test cases for BM25 Fusion.
 import os
 import tempfile
 import pytest
-import joblib
 import numpy as np
 from bm25_fusion import BM25
-from bm25_fusion.tokenization import tokenize
 
 def test_bm25_query():
     """
@@ -51,7 +49,7 @@ def test_bm25_empty_query():
     bm25 = BM25(texts=corpus, variant="bm25")
     with pytest.raises(AssertionError) as excinfo:
         bm25.query([], top_k=2)
-    assert "Query tokens cannot be empty." in str(excinfo.value)
+    assert "Query tokens or metadata cannot be empty" in str(excinfo.value)
 
 def test_bm25_metadata_filter():
     """
@@ -87,9 +85,28 @@ def test_save_and_load(tmp_path):
     bm25 = BM25(metadata=metadata, texts=corpus, variant="bm25")
     
     # Save to a temporary file.
-    temp_file = tmp_path / "bm25_state.pkl"
+    temp_file = tmp_path / "bm25_state.pkl.gz"
     bm25.save(str(temp_file))
     loaded_bm25 = BM25.load(str(temp_file))
+    
+    # Check that core attributes remain the same.
+    assert np.allclose(bm25.idf, loaded_bm25.idf)
+    assert bm25.vocab == loaded_bm25.vocab
+    assert loaded_bm25.texts == corpus
+    assert loaded_bm25.metadata == metadata
+
+def test_save_and_load_hdf5(tmp_path):
+    """
+    Test saving and loading a BM25 index.
+    """
+    corpus = ["save and load test", "another document"]
+    metadata = [{"tag": "test"}, {"tag": "sample"}]
+    bm25 = BM25(metadata=metadata, texts=corpus, variant="bm25")
+    
+    # Save to a temporary file.
+    temp_file = tmp_path / "bm25_state.h5"
+    bm25.save_hdf5(str(temp_file))
+    loaded_bm25 = BM25.load_hdf5(str(temp_file))
     
     # Check that core attributes remain the same.
     assert np.allclose(bm25.idf, loaded_bm25.idf)

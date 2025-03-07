@@ -5,13 +5,17 @@ BM25 Fusion package initialization.
 # pylint: disable=too-many-instance-attributes, too-many-arguments, too-many-locals, too-many-positional-arguments
 
 import gc
+import pickle
 from threading import Lock
 from collections import Counter
 from concurrent.futures import ThreadPoolExecutor
 
+import h5py
 import joblib
 import numpy as np
+from tqdm import tqdm
 from numba import njit, prange
+from numba.typed import List as TypedList
 from nltk.stem import PorterStemmer
 from nltk.corpus import stopwords as st
 from .tokenization import tokenize_texts
@@ -39,12 +43,15 @@ class BM25:
         self.stemmer = PorterStemmer() if kwargs.get('stemmer') is None else kwargs.get('stemmer')
         self.num_docs = len(texts)
         self.texts = texts if texts is not None else [""] * self.num_docs
+        self.do_stem = kwargs.get('do_stem', False)
 
         # Compute the stemmed corpus once:
-        stemmed_corpus = self._stem_corpus(corpus_tokens)
-        self.vocab = self._build_vocab(stemmed_corpus)
-        self.tf_matrix = self._compute_tf_matrix(stemmed_corpus)
-        del stemmed_corpus  # Free up memory.
+        if self.do_stem:
+            corpus_tokens = self._stem_corpus(corpus_tokens)
+
+        self.vocab = self._build_vocab(corpus_tokens)
+        self.tf_matrix = self._compute_tf_matrix(corpus_tokens)
+        del corpus_tokens  # Free up memory.
 
         gc.collect()
 
@@ -66,7 +73,7 @@ class BM25:
             self.idf = np.maximum(self.idf, 0)
         else:
             raise ValueError(f"Unknown BM25 variant: {self.variant}")
-            
+
         self.eager_index = _eager_scores(
             self.tf_matrix[0], self.tf_matrix[1], self.tf_matrix[2],
             self.idf, self.doc_lengths, self.avgdl, self._method_code,
@@ -84,7 +91,7 @@ class BM25:
             return [self.stemmer.stem(word) for word in doc]
 
         with ThreadPoolExecutor() as executor:
-            stemmed = list(executor.map(stem_doc, corpus))
+            stemmed = list(executor.map(stem_doc, tqdm(corpus)))
         return stemmed
 
     def _build_vocab(self, corpus):
@@ -96,7 +103,7 @@ class BM25:
             return set(doc)
 
         with ThreadPoolExecutor() as executor:
-            sets = list(executor.map(unique_words, corpus))
+            sets = list(executor.map(unique_words, tqdm(corpus)))
 
         unique_words_set = set().union(*sets)
         return {word: i for i, word in enumerate(unique_words_set)}
@@ -112,7 +119,7 @@ class BM25:
         data_list = []
         indices_list = []
         indptr = [0]
-        for doc in corpus:
+        for doc in tqdm(corpus):
             counts = Counter(doc)
             for word, count in counts.items():
                 vocab_index = self.vocab.get(word)
@@ -139,15 +146,17 @@ class BM25:
         Query the BM25 index.
         """
         query_tokens = query_tokens if isinstance(query_tokens, list) else query_tokens.split()
-        assert len(query_tokens) > 0, "Query tokens cannot be empty."
+        assert len(query_tokens) > 0 or metadata_filter,\
+                "Query tokens or metadata cannot be empty"
 
         query_tokens = [
             self.stemmer.stem(token.lower())
             for token in query_tokens
             if not self.stopwords or token.lower() not in self.stopwords
         ]
-        
-        assert len(query_tokens) > 0, "Query tokens must include words beyond the provided stop-words."
+
+        assert len(query_tokens) > 0 or metadata_filter,\
+              "Query tokens must include words beyond the provided stop-words."
 
         qvec = [0.0] * len(self.vocab)
         for word in query_tokens:
@@ -157,15 +166,17 @@ class BM25:
         qvec_np = np.array(qvec, dtype=np.float32)
         scores = _retrieve_scores(self.eager_index, self.tf_matrix[1], self.tf_matrix[2], qvec_np)
 
-        # Convert self.texts_lower and keywords to tuples to fix Numba warnings.
         if do_keyword:
-            keywords = tuple(token.lower() for token in query_tokens)
-            scores += _compute_keyword_scores(tuple(self.texts_lower), keywords)
+            # Convert self.texts_lower and keywords to numba.typed.List instead of tuples.
+            t_texts_lower = TypedList(self.texts_lower)
+            t_keywords = TypedList([token.lower() for token in query_tokens])
+            scores += _compute_keyword_scores(t_texts_lower, t_keywords)
 
         if metadata_filter:
             mask = np.array(
                 [
-                    1.0 if all(self.metadata[i].get(k) == v for k, v in metadata_filter.items())
+                    sum(self.metadata[i].get(k) in v for k, v in metadata_filter.items())
+                    if any(self.metadata[i].get(k) in v for k, v in metadata_filter.items())
                     else 0.0
                     for i in range(self.num_docs)
                 ],
@@ -184,7 +195,7 @@ class BM25:
 
     def save(self, filepath):
         """
-        Save the BM25 index weights and parameters using Joblib.
+        Save the BM25 index state using joblib with gzip compression.
         """
         state = {
             'k1': self.k1,
@@ -198,9 +209,9 @@ class BM25:
             'vocab': self.vocab,
             'vocab_size': self.vocab_size,
             'tf_matrix': (
-                 self.tf_matrix[0],
-                 self.tf_matrix[1],
-                 self.tf_matrix[2]
+                self.tf_matrix[0],
+                self.tf_matrix[1],
+                self.tf_matrix[2]
             ),
             'idf': self.idf,
             'metadata': self.metadata,
@@ -209,20 +220,109 @@ class BM25:
             '_method_code': self._method_code,
             'eager_index': self.eager_index
         }
-        joblib.dump(state, filepath, compress=3)
+        joblib.dump(state, filepath, compress=('gzip', 3))
 
     @staticmethod
     def load(filepath):
         """
-        Load the BM25 index weights and parameters from a file using Joblib.
+        Load the BM25 index state using joblib with gzip decompression.
         """
         state = joblib.load(filepath)
-        obj = BM25.__new__(BM25)  # create an uninitialized BM25 instance
+        obj = BM25.__new__(BM25)  # Create an uninitialized BM25 instance.
         obj.__dict__.update(state)
-        # Recreate any non-serializable attributes if needed (e.g. stemmer)
+        # Recreate non-serializable attributes.
+
         obj.stemmer = PorterStemmer()
         obj.lock = Lock()
         return obj
+
+    def save_hdf5(self, filepath):
+        """
+        Save the BM25 index using HDF5.
+        Numeric data are stored as datasets, and non-numeric objects are
+        pickled and stored as byte arrays.
+        """
+        with h5py.File(filepath, "w") as f:
+            # Save scalar parameters as attributes.
+            f.attrs["k1"] = self.k1
+            f.attrs["b"] = self.b
+            f.attrs["delta"] = self.delta
+            f.attrs["variant"] = self.variant
+            f.attrs["num_docs"] = self.num_docs
+            f.attrs["_method_code"] = self._method_code
+
+            # Save numeric arrays.
+            f.create_dataset("doc_lengths", data=self.doc_lengths)
+            f.create_dataset("avgdl", data=np.array([self.avgdl]))
+            f.create_dataset("idf", data=self.idf)
+            # tf_matrix is a tuple of arrays.
+            f.create_dataset("tf_matrix_0", data=self.tf_matrix[0])
+            f.create_dataset("tf_matrix_1", data=self.tf_matrix[1])
+            f.create_dataset("tf_matrix_2", data=self.tf_matrix[2])
+            # Save eager_index as a dataset.
+            f.create_dataset("eager_index", data=self.eager_index)
+
+            # For Python objects (vocab, metadata, texts, texts_lower), pickle them.
+            f.create_dataset("vocab", \
+                             data=np.void(
+                                 pickle.dumps(self.vocab, protocol=pickle.HIGHEST_PROTOCOL)
+                                 ))
+            f.create_dataset("metadata", \
+                             data=np.void(
+                                 pickle.dumps(self.metadata, protocol=pickle.HIGHEST_PROTOCOL)
+                                 ))
+            f.create_dataset("texts", \
+                             data=np.void(
+                                 pickle.dumps(self.texts, protocol=pickle.HIGHEST_PROTOCOL)
+                                 ))
+            f.create_dataset("texts_lower", \
+                             data=np.void(
+                                 pickle.dumps(self.texts_lower, protocol=pickle.HIGHEST_PROTOCOL)
+                                 ))
+            # Stopwords can be stored as a numpy string array.
+            stopwords_list = list(self.stopwords)
+            f.create_dataset("stopwords", data=np.array(stopwords_list, dtype="S"))
+
+    @staticmethod
+    def load_hdf5(filepath):
+        """
+        Load the BM25 index from an HDF5 file.
+        The pickled objects are restored from the byte streams.
+        """
+        with h5py.File(filepath, "r") as f:
+            obj = BM25.__new__(BM25)  # Create an uninitialized BM25 instance.
+
+            # Load scalar parameters.
+            obj.k1 = f.attrs["k1"]
+            obj.b = f.attrs["b"]
+            obj.delta = f.attrs["delta"]
+            obj.variant = f.attrs["variant"]
+            obj.num_docs = int(f.attrs["num_docs"])
+            obj._method_code = int(f.attrs["_method_code"])
+
+            # Load numeric arrays.
+            obj.doc_lengths = f["doc_lengths"][:]
+            obj.avgdl = float(f["avgdl"][0])
+            obj.idf = f["idf"][:]
+            tf0 = f["tf_matrix_0"][:]
+            tf1 = f["tf_matrix_1"][:]
+            tf2 = f["tf_matrix_2"][:]
+            obj.tf_matrix = (tf0, tf1, tf2)
+            obj.eager_index = f["eager_index"][:]
+
+            # Restore Python objects from pickled data.
+            obj.vocab = pickle.loads(bytes(f["vocab"][()]))
+            obj.metadata = pickle.loads(bytes(f["metadata"][()]))
+            obj.texts = pickle.loads(bytes(f["texts"][()]))
+            obj.texts_lower = pickle.loads(bytes(f["texts_lower"][()]))
+
+            # Restore stopwords (convert from bytes to string).
+            obj.stopwords = set(s.decode('utf-8') for s in f["stopwords"][:])
+
+            # Recreate any non-serializable attributes.
+            obj.stemmer = PorterStemmer()
+            obj.lock = Lock()
+            return obj
 
     def _rebuild_index(self, num_processes=4):
         """
@@ -312,7 +412,6 @@ def _compute_keyword_scores(texts, keywords):
     keyword_scores = np.zeros(num_docs, dtype=np.float32)
     for i in prange(num_docs):
         for keyword in keywords:
-            if texts[i].find(keyword) != -1:
+            if int(texts[i].find(keyword)) != -1:
                 keyword_scores[i] += 1
     return keyword_scores
-
