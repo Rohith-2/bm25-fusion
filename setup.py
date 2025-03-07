@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 
 setup(
     name="bm25_fusion",
-    version="0.1.4.1",
+    version="0.1.4.2",
     author="Rohith Ramakrishnan",
     author_email="rrohith2001@gmail.com",
     description="An ultra-fast BM25 retriever with support for multiple variants, metadata filtering, and stopword removal.",
@@ -20,6 +20,8 @@ setup(
     install_requires=[
         "numpy",
         "numba",
-        "nltk"
+        "nltk",
+        "h5py",
+        "tqdm"
     ],
 )
