@@ -145,7 +145,7 @@ class BM25:
         """
         Query the BM25 index.
         """
-        query_tokens = query_tokens if isinstance(query_tokens, list) else query_tokens.split()
+        query_tokens = query_tokens if isinstance(query_tokens, list) else query_tokens.split(" ")
         assert len(query_tokens) > 0 or metadata_filter,\
                 "Query tokens or metadata cannot be empty"
 
