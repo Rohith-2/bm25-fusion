@@ -102,6 +102,8 @@ results = bm25.query(query, metadata_filter={"category": ["science","news"]}, to
 
 for res in results:
     print(f"Score: {res['score']:.4f} | Text: {res['text']} | Metadata: {res}")
+
+bm25.save_hdf5('bm_model.h5')
 ```
 
 ## Supported BM25 Variants
