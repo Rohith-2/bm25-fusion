@@ -8,6 +8,8 @@ from concurrent.futures import ProcessPoolExecutor
 import nltk
 from tqdm import tqdm
 from nltk.stem import PorterStemmer
+import dask.bag as db
+from dask.diagnostics import ProgressBar
 
 # Initialize the PorterStemmer
 stemmer = PorterStemmer()
@@ -40,16 +42,18 @@ def process_document(doc):
     """
     return tokenizer(doc)
 
-def tokenize_texts(texts, num_processes=8):
+def tokenize_texts(texts, tokeniser=process_document, num_partitions=8):
     """
-    Tokenize a list of texts in parallel.
+    Tokenize a list of texts in parallel using Dask.
 
     :param texts: List of raw text strings.
-    :param num_processes: Number of parallel processes to use.
+    :param num_partitions: Number of partitions for Dask.
     :return: List of tokenized documents.
     """
-    with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        corpus_tokens = list(executor.map(process_document, tqdm(texts, total=len(texts), desc="Tokenizing vocabulary")))
+    print("Tokenizing documents in parallel :",end=' ')
+    bag_obj = db.from_sequence(texts, npartitions=num_partitions)
+    with ProgressBar():
+        corpus_tokens = bag_obj.map(tokeniser)
     return corpus_tokens
 
 if __name__ == "__main__":

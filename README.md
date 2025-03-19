@@ -9,7 +9,7 @@
 
 </div>
 
-Ultra‑fast, flexible BM25 retriever with Meta-Data Filtering & Real Time modifiable library written in Python and optimised via Numba. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
+Ultra‑fast, flexible BM25 with Meta-Data Filtering & Real Time modifiable library written in Python and optimised via Numba, Dask and Scipy Sparse Matrices. It implements several variants of the BM25 algorithm—including classic BM25 (Lucene/Robertson), BM25+, BM25L, and ATIRE—with support for eager indexing, metadata filtering, and stopword removal. By fusing these capabilities into one modular package, BM25 Fusion delivers efficient and scalable retrieval performance suitable for large datasets and modern search applications.
 
 ## Features
 
@@ -24,9 +24,10 @@ Ultra‑fast, flexible BM25 retriever with Meta-Data Filtering & Real Time modif
 
     - Addition: Rebuilds the index when new documents are added, updating texts, metadata, and all associated precomputed structures.
     - Removal: Finds and deletes specific documents and then rebuilds the index to reflect the changes.
+    - Supported in Version below 0.1.5 without Dask.
 
 - **High Performance:**  
-  Leverages Numba's JIT compilation for parallel score computations (eager indexing, score retrieval, and keyword matching) that helps to optimize performance even with large datasets.
+  Leverages Numba's JIT compilation for parallel score computations (eager indexing, score retrieval, and keyword matching), Dask's Delayed Arrarys and Sparse Matrices that helps to optimize performance even with large datasets.
 
 - **Optimised Persistance:**  
   Utilizes HD5F to store and load bm52 models.
@@ -42,7 +43,7 @@ Ultra‑fast, flexible BM25 retriever with Meta-Data Filtering & Real Time modif
 
 ## Installation
 
-You can install BM25 Fusion directly from source or from PyPI (once released). To install from source:
+You can install BM25 Fusion directly from source or from PyPI. To install from source:
 
 1. **Clone the repository:**
 
