@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "bm25_fusion"
-version = "0.1.4.2"
+version = "0.1.4.3"
 description = "An ultra-fast BM25 retriever with support for multiple variants, metadata filtering, and stopword removal."
 readme = "README.md"
 license = {text = "MIT License"}

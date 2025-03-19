@@ -18,7 +18,10 @@ from numba import njit, prange
 from numba.typed import List as TypedList
 from nltk.stem import PorterStemmer
 from nltk.corpus import stopwords as st
+from scipy.sparse import csr_matrix, save_npz, load_npz
+
 from .tokenization import tokenize_texts
+from .utils import _retrieve_scores, _compute_keyword_scores, _current_memory_usage_mb, _eager_scores
 
 class BM25:
     """
@@ -30,6 +33,7 @@ class BM25:
         """
         assert texts is not None, "Text for BM25 cannot be empty / None."
 
+        self.verbose = kwargs.get('verbose', False)  # New verbose flag.
         self.k1 = kwargs.get('k1', 1.5)
         self.b = kwargs.get('b', 0.75)
         self.delta = kwargs.get('delta', 0.5)
@@ -38,6 +42,8 @@ class BM25:
             if kwargs.get('stopwords') is not None else set(st.words('english'))
         # Tokenize texts
         corpus_tokens = tokenize_texts(texts, num_processes=kwargs.get('num_processes', 4))
+        if self.verbose:
+            print(f"Tokenization complete. Memory usage: {_current_memory_usage_mb()}")
         self.doc_lengths = np.array([len(doc) for doc in corpus_tokens], dtype=np.float32)
         self.avgdl = np.mean(self.doc_lengths)
         self.stemmer = PorterStemmer() if kwargs.get('stemmer') is None else kwargs.get('stemmer')
@@ -51,11 +57,17 @@ class BM25:
 
         self.vocab = self._build_vocab(corpus_tokens)
         self.tf_matrix = self._compute_tf_matrix(corpus_tokens)
+        if self.verbose:
+            print(f"TF Matrix Processed. Memory usage: {_current_memory_usage_mb()}")
+        
         del corpus_tokens  # Free up memory.
 
         gc.collect()
 
         self.idf = self._compute_idf()
+        if self.verbose:
+            print(f"IDF complete. Memory usage: {_current_memory_usage_mb()}")
+        
         self.metadata = kwargs.get('metadata', [{} for _ in range(self.num_docs)])
 
         # Precompute lower-case texts for efficient keyword matching.
@@ -75,10 +87,13 @@ class BM25:
             raise ValueError(f"Unknown BM25 variant: {self.variant}")
 
         self.eager_index = _eager_scores(
-            self.tf_matrix[0], self.tf_matrix[1], self.tf_matrix[2],
+            self.tf_matrix.data, self.tf_matrix.indices, self.tf_matrix.indptr,
             self.idf, self.doc_lengths, self.avgdl, self._method_code,
             self.k1, self.b, self.delta
         )
+        if self.verbose:
+            print(f"Eager Indexing complete. Memory usage: {_current_memory_usage_mb()}")
+        
         # Setup lock for live updates.
         self.lock = Lock()
 
@@ -86,40 +101,38 @@ class BM25:
         """
         Apply stemming to the corpus in parallel.
         """
-
         def stem_doc(doc):
             return [self.stemmer.stem(word) for word in doc]
 
+        iterator = tqdm(corpus, desc="Stemming texts") if self.verbose else corpus
         with ThreadPoolExecutor() as executor:
-            stemmed = list(executor.map(stem_doc, tqdm(corpus)))
+            stemmed = list(executor.map(stem_doc, iterator))
         return stemmed
 
     def _build_vocab(self, corpus):
         """
         Build vocabulary from the corpus in parallel.
         """
-
         def unique_words(doc):
             return set(doc)
 
+        iterator = tqdm(corpus, desc="Building vocabulary") if self.verbose else corpus
         with ThreadPoolExecutor() as executor:
-            sets = list(executor.map(unique_words, tqdm(corpus)))
-
+            sets = list(executor.map(unique_words, iterator))
         unique_words_set = set().union(*sets)
         return {word: i for i, word in enumerate(unique_words_set)}
 
     def _compute_tf_matrix(self, corpus):
         """
-        Compute term frequency arrays using plain Python loops.
+        Compute term frequency arrays using sparse matrices.
         Returns:
-            tf_data: list of term frequencies (float)
-            tf_indices: list of vocabulary indices (int)
-            tf_indptr: list of document pointer indices (int)
+            tf_matrix: csr_matrix of term frequencies
         """
         data_list = []
         indices_list = []
         indptr = [0]
-        for doc in tqdm(corpus):
+        iterator = tqdm(corpus, desc="Computing TF matrix") if self.verbose else corpus
+        for doc in iterator:
             counts = Counter(doc)
             for word, count in counts.items():
                 vocab_index = self.vocab.get(word)
@@ -128,16 +141,13 @@ class BM25:
                     data_list.append(float(count))
             indptr.append(len(data_list))
         self.vocab_size = len(self.vocab)
-        # Minimal conversion to numpy arrays for Numba interoperability.
-        return (np.array(data_list, dtype=np.float32),
-                np.array(indices_list, dtype=np.int32),
-                np.array(indptr, dtype=np.int32))
+        return csr_matrix((data_list, indices_list, indptr), shape=(len(corpus), self.vocab_size), dtype=np.float32)
 
     def _compute_idf(self):
         """
-        Compute inverse document frequency.
+        Compute inverse document frequency using sparse matrices.
         """
-        df = np.array(self.tf_matrix[0].astype(bool).sum(axis=0)).flatten()
+        df = np.diff(self.tf_matrix.indptr).astype(np.float32)
         df = np.maximum(df, 1e-6)
         return np.log((self.num_docs - df + 0.5) / (df + 0.5) + 1).astype(np.float32)
 
@@ -164,7 +174,7 @@ class BM25:
                 qvec[self.vocab[word]] += 1
 
         qvec_np = np.array(qvec, dtype=np.float32)
-        scores = _retrieve_scores(self.eager_index, self.tf_matrix[1], self.tf_matrix[2], qvec_np)
+        scores = _retrieve_scores(self.eager_index, self.tf_matrix.indices, self.tf_matrix.indptr, qvec_np)
 
         if do_keyword:
             # Convert self.texts_lower and keywords to numba.typed.List instead of tuples.
@@ -208,11 +218,6 @@ class BM25:
             'avgdl': self.avgdl,
             'vocab': self.vocab,
             'vocab_size': self.vocab_size,
-            'tf_matrix': (
-                self.tf_matrix[0],
-                self.tf_matrix[1],
-                self.tf_matrix[2]
-            ),
             'idf': self.idf,
             'metadata': self.metadata,
             'texts': self.texts,
@@ -221,6 +226,7 @@ class BM25:
             'eager_index': self.eager_index
         }
         joblib.dump(state, filepath, compress=('gzip', 3))
+        save_npz(filepath + "_tf_matrix.npz", self.tf_matrix)
 
     @staticmethod
     def load(filepath):
@@ -230,9 +236,10 @@ class BM25:
         state = joblib.load(filepath)
         obj = BM25.__new__(BM25)  # Create an uninitialized BM25 instance.
         obj.__dict__.update(state)
+        obj.tf_matrix = load_npz(filepath + "_tf_matrix.npz")
         # Recreate non-serializable attributes.
-
         obj.stemmer = PorterStemmer()
+        obj.verbose = False
         obj.lock = Lock()
         return obj
 
@@ -255,10 +262,6 @@ class BM25:
             f.create_dataset("doc_lengths", data=self.doc_lengths)
             f.create_dataset("avgdl", data=np.array([self.avgdl]))
             f.create_dataset("idf", data=self.idf)
-            # tf_matrix is a tuple of arrays.
-            f.create_dataset("tf_matrix_0", data=self.tf_matrix[0])
-            f.create_dataset("tf_matrix_1", data=self.tf_matrix[1])
-            f.create_dataset("tf_matrix_2", data=self.tf_matrix[2])
             # Save eager_index as a dataset.
             f.create_dataset("eager_index", data=self.eager_index)
 
@@ -283,6 +286,9 @@ class BM25:
             stopwords_list = list(self.stopwords)
             f.create_dataset("stopwords", data=np.array(stopwords_list, dtype="S"))
 
+            # Save sparse matrix
+            save_npz(filepath + "_tf_matrix.npz", self.tf_matrix)
+
     @staticmethod
     def load_hdf5(filepath):
         """
@@ -304,10 +310,6 @@ class BM25:
             obj.doc_lengths = f["doc_lengths"][:]
             obj.avgdl = float(f["avgdl"][0])
             obj.idf = f["idf"][:]
-            tf0 = f["tf_matrix_0"][:]
-            tf1 = f["tf_matrix_1"][:]
-            tf2 = f["tf_matrix_2"][:]
-            obj.tf_matrix = (tf0, tf1, tf2)
             obj.eager_index = f["eager_index"][:]
 
             # Restore Python objects from pickled data.
@@ -319,8 +321,12 @@ class BM25:
             # Restore stopwords (convert from bytes to string).
             obj.stopwords = set(s.decode('utf-8') for s in f["stopwords"][:])
 
+            # Load sparse matrix
+            obj.tf_matrix = load_npz(filepath + "_tf_matrix.npz")
+
             # Recreate any non-serializable attributes.
             obj.stemmer = PorterStemmer()
+            obj.verbose = False
             obj.lock = Lock()
             return obj
 
@@ -338,7 +344,7 @@ class BM25:
         gc.collect()
         self.idf = self._compute_idf()
         self.eager_index = _eager_scores(
-            self.tf_matrix[0], self.tf_matrix[1], self.tf_matrix[2],
+            self.tf_matrix.data, self.tf_matrix.indices, self.tf_matrix.indptr,
             self.idf, self.doc_lengths, self.avgdl, self._method_code,
             self.k1, self.b, self.delta
         )
@@ -373,45 +379,3 @@ class BM25:
             # Rebuild the index after removal.
             self._rebuild_index()
 
-@njit(parallel=True)
-def _eager_scores(tf_data, tf_indices, tf_indptr, idf, doc_lengths,
-                  avgdl, method_code, k1, b, delta):
-    num_docs = len(doc_lengths)
-    score_data = np.empty_like(tf_data)
-    for d in prange(num_docs):
-        norm = k1 * (1 - b + b * doc_lengths[d] / avgdl)
-        for j in range(tf_indptr[d], tf_indptr[d+1]):
-            tf = tf_data[j]
-            if method_code in (0, 3):
-                score = idf[tf_indices[j]] * ((tf * (k1 + 1)) / (tf + norm))
-            elif method_code == 1:
-                score = idf[tf_indices[j]] * (((tf + delta) * (k1 + 1)) / (tf + norm + delta))
-            elif method_code == 2:
-                score = idf[tf_indices[j]] * (tf / (tf + norm + delta * (doc_lengths[d] / avgdl)))
-            else:
-                score = 0.0
-            score_data[j] = score
-    return score_data
-
-@njit(parallel=True)
-def _retrieve_scores(eager_data, tf_indices, tf_indptr, query_vec):
-    num_docs = len(tf_indptr) - 1
-    scores = np.zeros(num_docs, dtype=np.float32)
-    for d in prange(num_docs):
-        s = 0.0
-        for j in range(tf_indptr[d], tf_indptr[d+1]):
-            i = tf_indices[j]
-            if query_vec[i] > 0:
-                s += eager_data[j]
-        scores[d] = s
-    return scores
-
-@njit(parallel=True)
-def _compute_keyword_scores(texts, keywords):
-    num_docs = len(texts)
-    keyword_scores = np.zeros(num_docs, dtype=np.float32)
-    for i in prange(num_docs):
-        for keyword in keywords:
-            if int(texts[i].find(keyword)) != -1:
-                keyword_scores[i] += 1
-    return keyword_scores

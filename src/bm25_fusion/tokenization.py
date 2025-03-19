@@ -49,7 +49,7 @@ def tokenize_texts(texts, num_processes=8):
     :return: List of tokenized documents.
     """
     with ProcessPoolExecutor(max_workers=num_processes) as executor:
-        corpus_tokens = list(executor.map(process_document, tqdm(texts, total=len(texts))))
+        corpus_tokens = list(executor.map(process_document, tqdm(texts, total=len(texts), desc="Tokenizing vocabulary")))
     return corpus_tokens
 
 if __name__ == "__main__":
