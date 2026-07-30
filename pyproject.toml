@@ -22,3 +22,9 @@ dependencies = [
 dev = [
     "pytest"
 ]
+
+[dependency-groups]
+dev = [
+    "build>=1.2.2.post1",
+    "twine>=6.1.0",
+]
